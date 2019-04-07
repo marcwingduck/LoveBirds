@@ -126,7 +126,7 @@ async def motor():
 
     while True:
         await asyncio.sleep(0.2)
-        if motorON == True:
+        if motorON:
             pos = pos * (-1)
             servo.value = pos
             await asyncio.sleep(2)
