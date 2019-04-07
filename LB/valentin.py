@@ -96,17 +96,15 @@ async def recTG():
             else:
                 while GPIO.input(recBUT) == GPIO.LOW:
                     await asyncio.sleep(delay)
-                os.kill(pid, signal.SIGKILL)
+                os.kill(pid, signal.SIGHUP)
                 heartBeatLed = False
                 # GPIO.output(recLED, GPIO.LOW)
                 p.ChangeDutyCycle(0)  # turns OFF the REC LED
                 playOK = True
                 playOKD = 30
                 if recD > 1:
-                    os.system('sudo killall sox')
-                    os.system('/usr/bin/sox /home/pi/rec.wav /home/pi/rec.ogg')
-                    os.rename('/home/pi/rec.ogg', '/home/pi/rec.oga')
-                    await client.send_file(peer, '/home/pi/rec.oga', voice_note=True)
+                    os.system('/usr/bin/opusenc /home/pi/rec.wav /home/pi/rec.oga')
+                    await client.send_file(peer, '/home/pi/rec.oga', caption='', allow_cache=False, voice_note=True)
         else:
             # heartBeatLed = False
             # GPIO.output(recLED, GPIO.LOW)
