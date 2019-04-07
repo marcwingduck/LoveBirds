@@ -66,7 +66,7 @@ async def timeC():
     while True:
         await asyncio.sleep(0.5)
         recD = recD + 1
-        if playOK == True:
+        if playOK:
             playOKD = playOKD - 1
             if playOKD <= 0:
                 playOK = False
@@ -146,7 +146,7 @@ async def heartBeat():
     p = GPIO.PWM(recLED, 500)  # set Frequece to 500Hz
     p.start(100)  # Start PWM output, Duty Cycle = 0
     while True:
-        if heartBeatLed == True:
+        if heartBeatLed:
             for dc in range(0, 20, 2):  # Increase duty cycle: 0~100
                 p.ChangeDutyCycle(dc)
                 await asyncio.sleep(0.01)
@@ -171,7 +171,6 @@ async def heartBeat():
                 p.ChangeDutyCycle(dc)
                 await asyncio.sleep(0.01)
             await asyncio.sleep(1)
-
         else:
             await asyncio.sleep(0.1)
 
@@ -238,7 +237,7 @@ client = TelegramClient('session_name', api_id, api_hash)
 asyncio.sleep(2)
 client.connect()
 if not client.is_user_authorized():
-    while os.path.exists('/home/pi/phone') == False:
+    while not os.path.exists('/home/pi/phone'):
         pass
     f = open('/home/pi/phone', 'r')
     phone = f.read()
@@ -249,7 +248,7 @@ if not client.is_user_authorized():
     asyncio.sleep(2)
     client.send_code_request(phone, force_sms=True)
 
-    while os.path.exists('/home/pi/key') == False:
+    while not os.path.exists('/home/pi/key'):
         pass
     f = open('/home/pi/key', 'r')
     key = f.read()
