@@ -1,195 +1,203 @@
-# credit to Louis Ros
-# !/usr/bin/python3.5
+# initial version by Louis Ros
+#!/usr/bin/env python3.5
 
-import asyncio
-import time
 import os
 import sys
+import time
 import signal
-from telethon import TelegramClient, events, sync
-from telethon.tl.types import InputMessagesFilterVoice
+import asyncio
+import subprocess
 import RPi.GPIO as GPIO
-from gpiozero import Servo
-from time import sleep
+from telethon import TelegramClient, events, sync
 
-# global
-heartbeat = False  # heartbeat effect on led
-authorized = False  # authorization to play messages
-rec_duration = 0  # duration of recording (in half second)
-auth_timeout = 0  # timeout (in 0.5 seconds) of authorization
-messages_to_play = -1  # number of voice mail waiting
 
-# pins
-rec_btn_pin = 23
-rec_led_pin = 25  # led recording (mic+)
-play_led_pin = 22  # led you have a voice mail
-motor_pin = 17
+recent_interaction = False  # auto play messages after interaction
+autoplay_timeout = 0        # timeout (in 0.5 seconds)
+is_recording = False        # flag if recording is taking place
+rec_duration = 0            # duration of latest recording (in 0.5 seconds)
+messages_to_play = -1       # number of voice messages waiting
+allow_all_users = True      # allow users other than your peer to send messages
 
-# gpio
 GPIO.setmode(GPIO.BCM)
 
+rec_btn_pin = 23   # sound card button
+rec_led_pin = 25   # sound card led (mic+)
+play_led_pin = 22  # extra notification led
+servo_pin = 17     # extra servo motor signal
+
 GPIO.setup(rec_btn_pin, GPIO.IN)
-GPIO.setup(play_led_pin, GPIO.OUT)
-GPIO.setup(motor_pin, GPIO.OUT)
-
 GPIO.setup(rec_led_pin, GPIO.OUT)
-GPIO.output(rec_led_pin, GPIO.LOW)
-rec_led = GPIO.PWM(rec_led_pin, 500)  # 500Hz
+GPIO.setup(play_led_pin, GPIO.OUT)
+GPIO.setup(servo_pin, GPIO.OUT)
 
 
-async def auth_time_update():
+async def time_update():
     """
-    time management: duration of recording and timeout for autorization to play
+    update timers.
+    counts half-seconds of current recording (basically counts the time the button is pressed).
+    counts down a timer (also in half-seconds) when the last interaction (button-press) took place.
     """
-    global authorized
-    global auth_timeout
+    global recent_interaction
+    global autoplay_timeout
     global rec_duration
+    global is_recording
 
     while True:
         await asyncio.sleep(0.5)
-        rec_duration = rec_duration + 1
-        if authorized:
-            auth_timeout = auth_timeout - 1
-            if auth_timeout <= 0:
-                authorized = False
+        if is_recording:
+            rec_duration += 1
+        if recent_interaction:
+            autoplay_timeout -= 1
+            if autoplay_timeout == 0:
+                recent_interaction = False
 
 
 async def rec_msg():
     """
-    Send a message 'voice'
-    initialisation of gpio led and button
-    when button is pushed: recording in a separate process
-    that is killed when the button is released
-    conversion to .oga by sox
+    record and send a voice message
+    initial button-press triggers subprocess that records voice message until the button is released.
+    convert to .oga using opusenc and send via telegram client.
     """
     global rec_duration
-    global authorized
-    global heartbeat
-    global auth_timeout
+    global recent_interaction
+    global autoplay_timeout
+    global is_recording
 
-    delay = 0.2
-    while True:
-        await asyncio.sleep(delay)
-        if GPIO.input(rec_btn_pin) == GPIO.LOW:
-            heartbeat = False
-            rec_led.ChangeDutyCycle(100)  # turns ON the REC LED
-            rec_duration = 0
-            pid = os.fork()
-            if pid == 0:
-                os.execl('/usr/bin/arecord', 'arecord', '--rate=44000', '/home/pi/rec.wav', '')
-            else:
-                while GPIO.input(rec_btn_pin) == GPIO.LOW:
-                    await asyncio.sleep(delay)
-                os.kill(pid, signal.SIGHUP)
-                heartbeat = False
-                # GPIO.output(rec_led_pin, GPIO.LOW)
-                rec_led.ChangeDutyCycle(0)  # turns OFF the REC LED
-                authorized = True
-                auth_timeout = 30
-                if rec_duration > 1:
-                    os.system('/usr/bin/opusenc /home/pi/rec.wav /home/pi/rec.oga')
-                    await client.send_file(peer, '/home/pi/rec.oga', caption='', allow_cache=False, voice_note=True)
-        else:
-            # heartbeat = False
-            # GPIO.output(rec_led_pin, GPIO.LOW)
-            rec_led.ChangeDutyCycle(0)
-
-
-# servo turns min/max/mid once a new message arrived
-async def spin_motor():
-    prev_messages_to_play = -1
-
-    servo = Servo(motor_pin)  # todo adjust min/max pulse width
-    servo.detach()
+    rec_led = GPIO.PWM(rec_led_pin, 100)
+    rec_led.start(0)
 
     while True:
         await asyncio.sleep(0.2)
-        if messages_to_play > prev_messages_to_play:
-            prev_messages_to_play = messages_to_play
+        if GPIO.input(rec_btn_pin) == GPIO.LOW:  # button got pressed
 
-            servo.min()
-            await asyncio.sleep(1)
-            servo.max()
-            await asyncio.sleep(1)
-            servo.mid()
-            await asyncio.sleep(1)
+            # prepare recording
+            rec_led.ChangeDutyCycle(100)  # turns on the recording led
+            is_recording = True
+            rec_duration = 0  # init duration counter
 
-            servo.detach()
+            # record until button is released
+            cmd = '/usr/bin/arecord --rate=44000 /home/pi/recordings/rec.wav'
+            proc = await asyncio.create_subprocess_shell(cmd)
+            while GPIO.input(rec_btn_pin) == GPIO.LOW:
+                await asyncio.sleep(0.2)  # wait until button is released
 
+            # button got released
+            proc.send_signal(signal.SIGHUP)  # hang up subprocess
+            await proc.wait()                # wait for it to finish
 
-# this is the les that mimic heartbeat when you have a voicemail waiting
-async def do_heartbeat():
-    global heartbeat
+            # end recording
+            rec_led.ChangeDutyCycle(0)  # turn off led
+            is_recording = False
+            recent_interaction = True  # triggers playing queued messages
+            autoplay_timeout = 40  # 20 seconds from now incoming recordings will be auto-played
 
-    rec_led.start(100)  # Start PWM output, Duty Cycle = 0
-    while True:
-        if heartbeat:
-            for dc in range(0, 20, 2):  # Increase duty cycle: 0~100
-                rec_led.ChangeDutyCycle(dc)
-                await asyncio.sleep(0.01)
-            for dc in range(20, -1, -2):  # Decrease duty cycle: 100~0
-                rec_led.ChangeDutyCycle(dc)
-                await asyncio.sleep(0.005)
-            time.sleep(0.05)
-
-            for dc in range(0, 101, 2):  # Increase duty cycle: 0~100
-                rec_led.ChangeDutyCycle(dc)  # Change duty cycle
-                await asyncio.sleep(0.01)
-            for dc in range(100, -1, -2):  # Decrease duty cycle: 100~0
-                rec_led.ChangeDutyCycle(dc)
-                await asyncio.sleep(0.01)
-
-            await asyncio.sleep(0.06)
-
-            for dc in range(0, 8, 2):  # Increase duty cycle: 0~100
-                rec_led.ChangeDutyCycle(dc)  # Change duty cycle
-                await asyncio.sleep(0.01)
-            for dc in range(7, -1, -1):  # Decrease duty cycle: 100~0
-                rec_led.ChangeDutyCycle(dc)
-                await asyncio.sleep(0.01)
-            await asyncio.sleep(1)
+            # convert to .oga
+            if rec_duration > 1:
+                conv_cmd = '/usr/bin/opusenc /home/pi/recordings/rec.wav /home/pi/recordings/rec.oga'
+                conv_proc = await asyncio.create_subprocess_shell(conv_cmd)
+                await conv_proc.wait()
+                await client.send_file(peer, '/home/pi/recordings/rec.oga', caption='', allow_cache=False, voice_note=True)
         else:
-            await asyncio.sleep(0.1)
+            rec_led.ChangeDutyCycle(0)
 
 
 async def play_msg():
     """
-    when authorized to play (authorized == True)
-    play one or several messages waiting (file .ogg) play_led_pin on
-    message playing => playing
-    last message waiting => messages_to_play
+    play arrived messages (if any) after recent_interaction was set to True.
+    this happens in rec_msg function because it interacts with the recording button...
     """
     global messages_to_play
-    global authorized
-    global auth_timeout
-    global heartbeat
+    global recent_interaction
+    global autoplay_timeout
 
     playing = 0
-    while True:
-        if messages_to_play >= 0:
-            GPIO.output(play_led_pin, GPIO.HIGH)
-            heartbeat = True
-        else:
-            GPIO.output(play_led_pin, GPIO.LOW)
-            heartbeat = False
 
-        if messages_to_play >= 0 and authorized:
+    while True:
+        if recent_interaction and messages_to_play >= 0:
             while playing <= messages_to_play:
-                name = '/home/pi/play' + str(playing) + '.ogg'
-                os.system('sudo killall vlc')
-                pid = os.fork()
-                if pid == 0:
-                    os.execl('/usr/bin/cvlc', 'cvlc', name, '--play-and-exit')
-                    # os.execl('/usr/bin/cvlc', 'cvlc',  name, ' vlc://quit')
-                os.wait()
-                playing = playing + 1
+                proc = await asyncio.create_subprocess_shell('/usr/bin/cvlc --play-and-exit /home/pi/recordings/play' + str(playing) + '.ogg')
+                await proc.wait()
+                playing += 1
                 if playing <= messages_to_play:
                     await asyncio.sleep(1)
             playing = 0
             messages_to_play = -1
-            authorized = True
-            auth_timeout = 30
+            recent_interaction = True  # prolong recent interaction
+            autoplay_timeout = 40
         await asyncio.sleep(0.2)
+
+
+async def spin_servo():
+    """
+    servo task.
+    spins the attached servo once a new message has arrived.
+    """
+    # init, move to center and disable
+    servo = GPIO.PWM(servo_pin, 50)
+    servo.start(7.5)
+    await asyncio.sleep(0.2)
+    servo.ChangeDutyCycle(0)
+
+    prev_messages_to_play = -1
+
+    while True:
+        await asyncio.sleep(0.2)
+        if messages_to_play > prev_messages_to_play:
+            for dc in range(750, 600, -10):
+                servo.ChangeDutyCycle(dc / 100.)
+                await asyncio.sleep(0.02)
+            for dc in range(600, 900, 10):
+                servo.ChangeDutyCycle(dc / 100.)
+                await asyncio.sleep(0.02)
+            for _ in range(2):
+                for dc in range(900, 800, -10):
+                    servo.ChangeDutyCycle(dc / 100.)
+                    await asyncio.sleep(0.01)
+                for dc in range(800, 900, 10):
+                    servo.ChangeDutyCycle(dc / 100.)
+                    await asyncio.sleep(0.01)
+            for dc in range(900, 750, -10):
+                servo.ChangeDutyCycle(dc / 100.)
+                await asyncio.sleep(0.01)
+            servo.ChangeDutyCycle(0)  # detach again
+        prev_messages_to_play = messages_to_play
+
+
+async def blink_led():
+    """
+    led notification if there are new messages.
+    """
+    play_led = GPIO.PWM(play_led_pin, 100)
+    play_led.start(0)
+
+    while True:
+        if messages_to_play >= 0:
+            for dc in range(0, 20, 2):
+                play_led.ChangeDutyCycle(dc)
+                await asyncio.sleep(0.01)
+            for dc in range(20, -1, -2):
+                play_led.ChangeDutyCycle(dc)
+                await asyncio.sleep(0.005)
+            await asyncio.sleep(0.05)
+
+            for dc in range(0, 101, 2):
+                play_led.ChangeDutyCycle(dc)
+                await asyncio.sleep(0.01)
+            for dc in range(100, -1, -2):
+                play_led.ChangeDutyCycle(dc)
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.06)
+
+            for dc in range(0, 8, 2):
+                play_led.ChangeDutyCycle(dc)
+                await asyncio.sleep(0.01)
+            for dc in range(7, -1, -1):
+                play_led.ChangeDutyCycle(dc)
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(1)
+        else:
+            play_led.ChangeDutyCycle(0)
+            await asyncio.sleep(0.1)
 
 
 """
@@ -200,20 +208,21 @@ filtering of message coming from the correspondant
 download of file .oga renamed .ogg
 
 """
-GPIO.output(play_led_pin, GPIO.HIGH)
 api_id = 592944
 api_hash = 'ae06a0f0c3846d9d4e4a7065bede9407'
+
 client = TelegramClient('session_name', api_id, api_hash)
 asyncio.sleep(2)
 client.connect()
+
 if not client.is_user_authorized():
     while not os.path.exists('/home/pi/phone'):
         pass
     f = open('/home/pi/phone', 'r')
     phone = f.read()
     f.close()
-    # os.remove('/home/pi/phone')
     print(phone)
+    os.remove('/home/pi/phone')
 
     asyncio.sleep(2)
     client.send_code_request(phone, force_sms=True)
@@ -225,48 +234,55 @@ if not client.is_user_authorized():
     f.close()
     print(key)
     os.remove('/home/pi/key')
+
     asyncio.sleep(2)
     me = client.sign_in(phone=phone, code=key)
-GPIO.output(play_led_pin, GPIO.LOW)
 
 peer_file = open('/boot/PEER.txt', 'r')
-peer = peer_file.readline()
-if peer[-1] == '\n':
-    peer = peer[0:-1]
+peer = peer_file.readline().strip()
+if not peer:
+    print('no peer provided.')
+    sys.exit(1)
+
+# create temporary directory for voice messages
+if not os.path.exists('/home/pi/recordings'):
+    os.mkdir('/home/pi/recordings')
 
 
 @client.on(events.NewMessage)
 async def receive_msg(event):
+    """
+    new message event handler.
+    """
     global messages_to_play
 
     # print(event.stringify())
     from_name = '@' + event.sender.username
 
-    # only plays messages sent by your correpondant, if you want to play messages from everybody comment next line and uncomment the next next line
-    if event.media.document.mime_type == 'audio/ogg' and peer == from_name:
-        ad = await client.download_media(event.media)
-        messages_to_play += 1
-        if messages_to_play == 0:
-            # os.system('/usr/bin/cvlc --play-and-exit /home/pi/LB/lovebird.wav')
-            os.system('/usr/bin/cvlc --play-and-exit /home/pi/LB/lovebird.wav')
-        name = '/home/pi/play' + str(messages_to_play) + '.ogg'
-        os.rename(ad, name)
-        await asyncio.sleep(0.2)
-        # os.system('/usr/bin/cvlc --play-and-exit ' +  name)
+    if event.media.document.mime_type == 'audio/ogg':
+        if peer == from_name or allow_all_users:
+            message = await client.download_media(event.media)
+            messages_to_play += 1
+            if not recent_interaction and messages_to_play >= 0:
+                cmd = '/usr/bin/cvlc --play-and-exit /home/pi/LB/lovebird.wav'
+                proc = await asyncio.create_subprocess_shell(cmd)
+                await proc.wait()
+            name = '/home/pi/recordings/play' + str(messages_to_play) + '.ogg'
+            os.rename(message, name)
+            await asyncio.sleep(0.2)
 
 
 # main sequence (handler receive_msg), play_msg, auth_time_update, rec_msg, spin_motor and do_heartbeat are executed in parallel
 
-# os.system('/usr/bin/cvlc /home/pi/LB/lovebird.wav vlc://quit')
-os.system('/usr/bin/cvlc --play-and-exit /home/pi/LB/lovebird.wav')
+subprocess.run(['/usr/bin/cvlc', '--play-and-exit', '/home/pi/LB/lovebird.wav'])
 
 loop = asyncio.get_event_loop()
 
 loop.create_task(rec_msg())
 loop.create_task(play_msg())
-loop.create_task(auth_time_update())
-loop.create_task(spin_motor())
-loop.create_task(do_heartbeat())
+loop.create_task(time_update())
+loop.create_task(spin_servo())
+loop.create_task(blink_led())
 
 loop.run_forever()
 
