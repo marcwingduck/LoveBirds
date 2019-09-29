@@ -200,90 +200,83 @@ async def blink_led():
             await asyncio.sleep(0.1)
 
 
-"""
-initialization of the application and user for telegram
-init of the name of the correspondant with the file /boot/PEER.txt
-declaration of the handler for the messages arrival
-filtering of message coming from the correspondant
-download of file .oga renamed .ogg
+def main():
+    api_id = 592944
+    api_hash = 'ae06a0f0c3846d9d4e4a7065bede9407'
 
-"""
-api_id = 592944
-api_hash = 'ae06a0f0c3846d9d4e4a7065bede9407'
-
-client = TelegramClient('session_name', api_id, api_hash)
-asyncio.sleep(2)
-client.connect()
-
-if not client.is_user_authorized():
-    while not os.path.exists('/home/pi/phone'):
-        pass
-    f = open('/home/pi/phone', 'r')
-    phone = f.read()
-    f.close()
-    print(phone)
-    os.remove('/home/pi/phone')
-
+    client = TelegramClient('session_name', api_id, api_hash)
     asyncio.sleep(2)
-    client.send_code_request(phone, force_sms=True)
+    client.connect()
 
-    while not os.path.exists('/home/pi/key'):
-        pass
-    f = open('/home/pi/key', 'r')
-    key = f.read()
-    f.close()
-    print(key)
-    os.remove('/home/pi/key')
+    if not client.is_user_authorized():
+        while not os.path.exists('/home/pi/phone'):
+            pass
+        f = open('/home/pi/phone', 'r')
+        phone = f.read()
+        f.close()
+        print(phone)
 
-    asyncio.sleep(2)
-    me = client.sign_in(phone=phone, code=key)
+        asyncio.sleep(2)
+        client.send_code_request(phone, force_sms=True)
 
-peer_file = open('/boot/PEER.txt', 'r')
-peer = peer_file.readline().strip()
-if not peer:
-    print('no peer provided.')
-    sys.exit(1)
+        while not os.path.exists('/home/pi/key'):
+            pass
+        f = open('/home/pi/key', 'r')
+        key = f.read()
+        f.close()
+        print(key)
+        os.remove('/home/pi/key')
 
-# create temporary directory for voice messages
-if not os.path.exists('/home/pi/recordings'):
-    os.mkdir('/home/pi/recordings')
+        asyncio.sleep(2)
+        me = client.sign_in(phone=phone, code=key)
+
+    peer_file = open('/boot/PEER.txt', 'r')
+    peer = peer_file.readline().strip()
+    if not peer:
+        print('no peer provided.')
+        sys.exit(1)
+
+    # create temporary directory for voice messages
+    if not os.path.exists('/home/pi/recordings'):
+        os.mkdir('/home/pi/recordings')
+
+    @client.on(events.NewMessage)
+    async def receive_msg(event):
+        """
+        new message event handler.
+        """
+        global messages_to_play
+
+        # print(event.stringify())
+        from_name = '@' + event.sender.username
+
+        if event.media.document.mime_type == 'audio/ogg':
+            if peer == from_name or allow_all_users:
+                message = await client.download_media(event.media)
+                messages_to_play += 1
+                if not recent_interaction and messages_to_play >= 0:
+                    cmd = '/usr/bin/cvlc --play-and-exit /home/pi/LB/lovebird.wav'
+                    proc = await asyncio.create_subprocess_shell(cmd)
+                    await proc.wait()
+                name = '/home/pi/recordings/play' + \
+                    str(messages_to_play) + '.ogg'
+                os.rename(message, name)
+                await asyncio.sleep(0.2)
+
+    subprocess.run(['/usr/bin/cvlc', '--play-and-exit', '/home/pi/LB/lovebird.wav'])
+
+    loop = asyncio.get_event_loop()
+
+    loop.create_task(rec_msg())
+    loop.create_task(play_msg())
+    loop.create_task(time_update())
+    loop.create_task(spin_servo())
+    loop.create_task(blink_led())
+
+    loop.run_forever()
+
+    client.run_until_disconnected()
 
 
-@client.on(events.NewMessage)
-async def receive_msg(event):
-    """
-    new message event handler.
-    """
-    global messages_to_play
-
-    # print(event.stringify())
-    from_name = '@' + event.sender.username
-
-    if event.media.document.mime_type == 'audio/ogg':
-        if peer == from_name or allow_all_users:
-            message = await client.download_media(event.media)
-            messages_to_play += 1
-            if not recent_interaction and messages_to_play >= 0:
-                cmd = '/usr/bin/cvlc --play-and-exit /home/pi/LB/lovebird.wav'
-                proc = await asyncio.create_subprocess_shell(cmd)
-                await proc.wait()
-            name = '/home/pi/recordings/play' + str(messages_to_play) + '.ogg'
-            os.rename(message, name)
-            await asyncio.sleep(0.2)
-
-
-# main sequence (handler receive_msg), play_msg, auth_time_update, rec_msg, spin_motor and do_heartbeat are executed in parallel
-
-subprocess.run(['/usr/bin/cvlc', '--play-and-exit', '/home/pi/LB/lovebird.wav'])
-
-loop = asyncio.get_event_loop()
-
-loop.create_task(rec_msg())
-loop.create_task(play_msg())
-loop.create_task(time_update())
-loop.create_task(spin_servo())
-loop.create_task(blink_led())
-
-loop.run_forever()
-
-client.run_until_disconnected()
+if __name__ == "__main__":
+    main()

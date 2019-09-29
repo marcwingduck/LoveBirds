@@ -1,16 +1,18 @@
+#!/usr/bin/env python3.5
+
 from flask import Flask, render_template, redirect, url_for, request, make_response
 import datetime
 import os
 
+
 app = Flask(__name__)
 
 
-@app.route('/',methods = ['POST', 'GET'])
+@app.route('/', methods=['POST', 'GET'])
 def index():
-
     now = datetime.datetime.now()
-    timeString = now.strftime("%H:%M:%S      %d/%m/%Y")
-    
+    timeString = now.strftime("%H:%M:%S %d/%m/%Y")
+
     txt = open('/boot/PEER.txt', 'r')
     currentPeer = txt.read()
     txt.close()
@@ -18,8 +20,6 @@ def index():
     txt = open('/home/pi/phone', 'r')
     currentPhone = txt.read()
     txt.close()
-
-
 
     if request.method == 'POST':
         peer = request.form['peer']
@@ -47,17 +47,14 @@ def index():
             os.system('chgrp pi /home/pi/key')
 
     template = {
-        'title' : 'LOVE BIRDS',
-        'time' : timeString,
-        'currentPeer' : currentPeer,
-        'currentPhone' : currentPhone
-        }
+        'title': 'LOVE BIRDS',
+        'time': timeString,
+        'currentPeer': currentPeer,
+        'currentPhone': currentPhone
+    }
 
-
-    return  render_template('index.html', **template)
-
+    return render_template('index.html', **template)
 
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=80, debug=True)
-
