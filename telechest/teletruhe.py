@@ -1,5 +1,4 @@
-# initial version by Louis Ros
-#!/usr/bin/env python3.5
+#!/usr/bin/env python3
 
 import os
 import sys
@@ -16,7 +15,7 @@ autoplay_timeout = 0        # timeout (in 0.5 seconds)
 is_recording = False        # flag if recording is taking place
 rec_duration = 0            # duration of latest recording (in 0.5 seconds)
 messages_to_play = -1       # number of voice messages waiting
-allow_all_users = True      # allow users other than your peer to send messages
+allow_others = True         # allow users other than your peer to send messages
 
 GPIO.setmode(GPIO.BCM)
 
@@ -201,40 +200,30 @@ async def blink_led():
 
 
 def main():
-    api_id = 592944
-    api_hash = 'ae06a0f0c3846d9d4e4a7065bede9407'
+    global peer
+    global client
+    global allow_others
 
-    client = TelegramClient('session_name', api_id, api_hash)
-    asyncio.sleep(2)
+    api_id = 1199490
+    api_hash = '78fc29abd4ede127b2488e9e273cfb66'
+    client = TelegramClient('love_session', api_id, api_hash)
     client.connect()
 
     if not client.is_user_authorized():
-        while not os.path.exists('/home/pi/phone'):
-            pass
-        f = open('/home/pi/phone', 'r')
-        phone = f.read()
-        f.close()
-        print(phone)
+        print('not authorized to use telegram. please execute authorize.py!')
+        sys.exit(0)
 
-        asyncio.sleep(2)
-        client.send_code_request(phone, force_sms=True)
-
-        while not os.path.exists('/home/pi/key'):
-            pass
-        f = open('/home/pi/key', 'r')
-        key = f.read()
-        f.close()
-        print(key)
-        os.remove('/home/pi/key')
-
-        asyncio.sleep(2)
-        me = client.sign_in(phone=phone, code=key)
-
-    peer_file = open('/boot/PEER.txt', 'r')
+    peer_file = open('/home/pi/peer', 'r')
     peer = peer_file.readline().strip()
     if not peer:
         print('no peer provided.')
         sys.exit(1)
+
+    if os.path.exists('/home/pi/allow_others'):
+        allow_others_file = open('/home/pi/allow_others', 'r')
+        allow_others = True if allow_others_file.readline().strip() == 'y' else False
+    else:
+        allow_others = False
 
     # create temporary directory for voice messages
     if not os.path.exists('/home/pi/recordings'):
@@ -251,11 +240,11 @@ def main():
         from_name = '@' + event.sender.username
 
         if event.media.document.mime_type == 'audio/ogg':
-            if peer == from_name or allow_all_users:
+            if from_name == peer or allow_others:
                 message = await client.download_media(event.media)
                 messages_to_play += 1
                 if not recent_interaction and messages_to_play >= 0:
-                    cmd = '/usr/bin/cvlc --play-and-exit /home/pi/LB/lovebird.wav'
+                    cmd = '/usr/bin/cvlc --play-and-exit /home/pi/telechest/notification.wav'
                     proc = await asyncio.create_subprocess_shell(cmd)
                     await proc.wait()
                 name = '/home/pi/recordings/play' + \
@@ -263,7 +252,7 @@ def main():
                 os.rename(message, name)
                 await asyncio.sleep(0.2)
 
-    subprocess.run(['/usr/bin/cvlc', '--play-and-exit', '/home/pi/LB/lovebird.wav'])
+    subprocess.run(['/usr/bin/cvlc', '--play-and-exit', '/home/pi/telechest/notification.wav'])
 
     loop = asyncio.get_event_loop()
 
