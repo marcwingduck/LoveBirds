@@ -22,7 +22,7 @@ GPIO.setmode(GPIO.BCM)
 rec_btn_pin = 23   # sound card button
 rec_led_pin = 25   # sound card led (mic+)
 play_led_pin = 22  # extra notification led
-servo_pin = 17     # extra servo motor signal
+servo_pin = 13     # extra servo motor signal
 
 GPIO.setup(rec_btn_pin, GPIO.IN)
 GPIO.setup(rec_led_pin, GPIO.OUT)
@@ -114,7 +114,8 @@ async def play_msg():
     while True:
         if recent_interaction and messages_to_play >= 0:
             while playing <= messages_to_play:
-                proc = await asyncio.create_subprocess_shell('/usr/bin/cvlc --play-and-exit /home/pi/recordings/play' + str(playing) + '.ogg')
+                cmd = '/usr/bin/opusdec --force-wav --quiet recordings/play' + str(playing) + '.ogg - | /usr/bin/aplay'
+                proc = await asyncio.create_subprocess_shell(cmd)
                 await proc.wait()
                 playing += 1
                 if playing <= messages_to_play:
@@ -133,14 +134,11 @@ async def spin_servo():
     """
     # init, move to center and disable
     servo = GPIO.PWM(servo_pin, 50)
-    servo.start(7.5)
-    await asyncio.sleep(0.2)
-    servo.ChangeDutyCycle(0)
+    servo.start(0)
 
     prev_messages_to_play = -1
 
     while True:
-        await asyncio.sleep(0.2)
         if messages_to_play > prev_messages_to_play:
             for dc in range(750, 600, -10):
                 servo.ChangeDutyCycle(dc / 100.)
@@ -160,6 +158,7 @@ async def spin_servo():
                 await asyncio.sleep(0.01)
             servo.ChangeDutyCycle(0)  # detach again
         prev_messages_to_play = messages_to_play
+        await asyncio.sleep(0.5)
 
 
 async def blink_led():
@@ -196,7 +195,7 @@ async def blink_led():
             await asyncio.sleep(1)
         else:
             play_led.ChangeDutyCycle(0)
-            await asyncio.sleep(0.1)
+        await asyncio.sleep(1)
 
 
 def main():
@@ -220,10 +219,7 @@ def main():
         sys.exit(1)
 
     if os.path.exists('/home/pi/allow_others'):
-        allow_others_file = open('/home/pi/allow_others', 'r')
-        allow_others = True if allow_others_file.readline().strip() == 'y' else False
-    else:
-        allow_others = False
+        allow_others = True
 
     # create temporary directory for voice messages
     if not os.path.exists('/home/pi/recordings'):
@@ -244,7 +240,7 @@ def main():
                 message = await client.download_media(event.media)
                 messages_to_play += 1
                 if not recent_interaction and messages_to_play >= 0:
-                    cmd = '/usr/bin/cvlc --play-and-exit /home/pi/telechest/notification.wav'
+                    cmd = '/usr/bin/aplay /home/pi/telechest/notification.wav'
                     proc = await asyncio.create_subprocess_shell(cmd)
                     await proc.wait()
                 name = '/home/pi/recordings/play' + \
@@ -252,7 +248,7 @@ def main():
                 os.rename(message, name)
                 await asyncio.sleep(0.2)
 
-    subprocess.run(['/usr/bin/cvlc', '--play-and-exit', '/home/pi/telechest/notification.wav'])
+    subprocess.run(['/usr/bin/aplay', '/home/pi/telechest/notification.wav'])
 
     loop = asyncio.get_event_loop()
 

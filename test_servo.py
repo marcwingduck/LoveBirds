@@ -30,6 +30,7 @@ try:
         for dc in range(900, 750, -10):
             servo.ChangeDutyCycle(dc / 100.)
             time.sleep(0.01)
+        servo.ChangeDutyCycle(0)
         time.sleep(1)
 except KeyboardInterrupt:
     pass

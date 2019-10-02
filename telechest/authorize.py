@@ -20,15 +20,18 @@ def main():
         peer_file = open('/home/pi/peer', 'w')
         peer_file.write(peer.strip())
         peer_file.close()
-
-        allow_others = ''
-        while allow_others not in ['y', 'n']:
-            allow_others = input('play messages from other users? (y/n): ')
-        allow_others_file = open('/home/pi/allow_others', 'w')
-        allow_others_file.write(allow_others)
-        allow_others_file.close()
     else:
         print('already authorized.')
+    
+    recv_other = ''
+    recv_path = '/home/pi/recv_other'
+    while recv_other not in ['y', 'n']:
+        recv_other = input('play messages from other users? (y/n): ')
+    if recv_other == 'y':
+        if not os.path.exists(recv_path):
+            os.mknod(recv_path)
+    elif os.path.exists(recv_path):
+        os.remove(recv_path)
 
 
 if __name__ == '__main__':
