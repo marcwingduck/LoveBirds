@@ -4,9 +4,9 @@ import os
 import sys
 import time
 import signal
+import pigpio
 import asyncio
 import subprocess
-import RPi.GPIO as GPIO
 from telethon import TelegramClient, events, sync
 
 
@@ -17,17 +17,21 @@ rec_duration = 0            # duration of latest recording (in 0.5 seconds)
 messages_to_play = -1       # number of voice messages waiting
 allow_others = True         # allow users other than your peer to send messages
 
-GPIO.setmode(GPIO.BCM)
-
 rec_btn_pin = 23   # sound card button
 rec_led_pin = 25   # sound card led (mic+)
 play_led_pin = 22  # extra notification led
-servo_pin = 13     # extra servo motor signal
+servo_pin = 17     # extra servo motor signal
 
-GPIO.setup(rec_btn_pin, GPIO.IN)
-GPIO.setup(rec_led_pin, GPIO.OUT)
-GPIO.setup(play_led_pin, GPIO.OUT)
-GPIO.setup(servo_pin, GPIO.OUT)
+io = pigpio.pi()
+
+if not io.connected:
+    print('pigpio not connected. $sudo pigpiod')
+    sys.exit(0)
+
+io.set_mode(rec_btn_pin, pigpio.INPUT)
+io.set_mode(rec_led_pin, pigpio.OUTPUT)
+io.set_mode(play_led_pin, pigpio.OUTPUT)
+io.set_mode(servo_pin, pigpio.OUTPUT)
 
 
 async def time_update():
@@ -62,22 +66,21 @@ async def rec_msg():
     global autoplay_timeout
     global is_recording
 
-    rec_led = GPIO.PWM(rec_led_pin, 100)
-    rec_led.start(0)
+    io.set_PWM_dutycycle(rec_led_pin, 100)
 
     while True:
         await asyncio.sleep(0.2)
-        if GPIO.input(rec_btn_pin) == GPIO.LOW:  # button got pressed
+        if io.read(rec_btn_pin) == 0:  # button got pressed
 
             # prepare recording
-            rec_led.ChangeDutyCycle(100)  # turns on the recording led
+            io.set_PWM_dutycycle(rec_led_pin, 100)  # turns on the recording led
             is_recording = True
             rec_duration = 0  # init duration counter
 
             # record until button is released
             cmd = '/usr/bin/arecord --rate=44000 /home/pi/recordings/rec.wav'
             proc = await asyncio.create_subprocess_shell(cmd)
-            while GPIO.input(rec_btn_pin) == GPIO.LOW:
+            while io.read(rec_btn_pin) == 0:
                 await asyncio.sleep(0.2)  # wait until button is released
 
             # button got released
@@ -85,7 +88,7 @@ async def rec_msg():
             await proc.wait()                # wait for it to finish
 
             # end recording
-            rec_led.ChangeDutyCycle(0)  # turn off led
+            io.set_PWM_dutycycle(rec_btn_pin, 0)  # turn off led
             is_recording = False
             recent_interaction = True  # triggers playing queued messages
             autoplay_timeout = 40  # 20 seconds from now incoming recordings will be auto-played
@@ -97,7 +100,7 @@ async def rec_msg():
                 await conv_proc.wait()
                 await client.send_file(peer, '/home/pi/recordings/rec.oga', caption='', allow_cache=False, voice_note=True)
         else:
-            rec_led.ChangeDutyCycle(0)
+            io.set_PWM_dutycycle(rec_led_pin, 0)
 
 
 async def play_msg():
@@ -132,31 +135,30 @@ async def spin_servo():
     servo task.
     spins the attached servo once a new message has arrived.
     """
-    # init, move to center and disable
-    servo = GPIO.PWM(servo_pin, 50)
-    servo.start(0)
+    io.set_servo_pulsewidth(servo_pin, 0)
+    await asyncio.sleep(0.1)
 
     prev_messages_to_play = -1
 
     while True:
         if messages_to_play > prev_messages_to_play:
-            for dc in range(750, 600, -10):
-                servo.ChangeDutyCycle(dc / 100.)
+            for dc in range(1500, 1200, -10):
+                io.set_servo_pulsewidth(servo_pin, dc)
                 await asyncio.sleep(0.02)
-            for dc in range(600, 900, 10):
-                servo.ChangeDutyCycle(dc / 100.)
+            for dc in range(1200, 1800, 10):
+                io.set_servo_pulsewidth(servo_pin, dc)
                 await asyncio.sleep(0.02)
             for _ in range(2):
-                for dc in range(900, 800, -10):
-                    servo.ChangeDutyCycle(dc / 100.)
+                for dc in range(1800, 1600, -10):
+                    io.set_servo_pulsewidth(servo_pin, dc)
                     await asyncio.sleep(0.01)
-                for dc in range(800, 900, 10):
-                    servo.ChangeDutyCycle(dc / 100.)
+                for dc in range(1600, 1800, 10):
+                    io.set_servo_pulsewidth(servo_pin, dc)
                     await asyncio.sleep(0.01)
-            for dc in range(900, 750, -10):
-                servo.ChangeDutyCycle(dc / 100.)
+            for dc in range(1800, 1500, -10):
+                io.set_servo_pulsewidth(servo_pin, dc)
                 await asyncio.sleep(0.01)
-            servo.ChangeDutyCycle(0)  # detach again
+            io.set_servo_pulsewidth(servo_pin, 0)
         prev_messages_to_play = messages_to_play
         await asyncio.sleep(0.5)
 
@@ -165,36 +167,35 @@ async def blink_led():
     """
     led notification if there are new messages.
     """
-    play_led = GPIO.PWM(play_led_pin, 100)
-    play_led.start(0)
+    io.set_PWM_dutycycle(play_led_pin, 0)
 
     while True:
         if messages_to_play >= 0:
             for dc in range(0, 20, 2):
-                play_led.ChangeDutyCycle(dc)
+                io.set_PWM_dutycycle(play_led_pin, dc)
                 await asyncio.sleep(0.01)
             for dc in range(20, -1, -2):
-                play_led.ChangeDutyCycle(dc)
+                io.set_PWM_dutycycle(play_led_pin, dc)
                 await asyncio.sleep(0.005)
             await asyncio.sleep(0.05)
 
             for dc in range(0, 101, 2):
-                play_led.ChangeDutyCycle(dc)
+                io.set_PWM_dutycycle(play_led_pin, dc)
                 await asyncio.sleep(0.01)
             for dc in range(100, -1, -2):
-                play_led.ChangeDutyCycle(dc)
+                io.set_PWM_dutycycle(play_led_pin, dc)
                 await asyncio.sleep(0.01)
             await asyncio.sleep(0.06)
 
             for dc in range(0, 8, 2):
-                play_led.ChangeDutyCycle(dc)
+                io.set_PWM_dutycycle(play_led_pin, dc)
                 await asyncio.sleep(0.01)
             for dc in range(7, -1, -1):
-                play_led.ChangeDutyCycle(dc)
+                io.set_PWM_dutycycle(play_led_pin, dc)
                 await asyncio.sleep(0.01)
             await asyncio.sleep(1)
         else:
-            play_led.ChangeDutyCycle(0)
+            io.set_PWM_dutycycle(play_led_pin, 0)
         await asyncio.sleep(1)
 
 
