@@ -22,7 +22,7 @@ GPIO.setmode(GPIO.BCM)
 rec_btn_pin = 23   # sound card button
 rec_led_pin = 25   # sound card led (mic+)
 play_led_pin = 22  # extra notification led
-servo_pin = 13     # extra servo motor signal
+servo_pin = 17     # extra servo motor signal
 
 GPIO.setup(rec_btn_pin, GPIO.IN)
 GPIO.setup(rec_led_pin, GPIO.OUT)
